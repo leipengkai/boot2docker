@@ -6,8 +6,10 @@ RUN apt-get update; \
 	apt-get install -y --no-install-recommends \
 		bash-completion \
 		bc \
+		bison \
 		ca-certificates \
 		cpio \
+		flex \
 		gcc \
 		git \
 		gnupg dirmngr \
@@ -15,6 +17,7 @@ RUN apt-get update; \
 		kmod \
 		libc6-dev \
 		libelf-dev \
+		libssl-dev \
 		make \
 		p7zip-full \
 		patch \
@@ -34,12 +37,12 @@ WORKDIR /rootfs
 
 # updated via "update.sh"
 ENV TCL_MIRRORS http://distro.ibiblio.org/tinycorelinux http://repo.tinycorelinux.net
-ENV TCL_MAJOR 10.x
-ENV TCL_VERSION 10.1
+ENV TCL_MAJOR 11.x
+ENV TCL_VERSION 11.0
 
 # http://distro.ibiblio.org/tinycorelinux/8.x/x86_64/archive/8.2.1/distribution_files/rootfs64.gz.md5.txt
 # updated via "update.sh"
-ENV TCL_ROOTFS="rootfs64.gz" TCL_ROOTFS_MD5="ec65d3b2bbb64f62a171f60439c84127"
+ENV TCL_ROOTFS="rootfs64.gz" TCL_ROOTFS_MD5="ea8699a39115289ed00d807eac4c3118"
 
 COPY files/tce-load.patch files/udhcpc.patch /tcl-patches/
 
@@ -116,38 +119,27 @@ RUN mkdir -p proc; \
 	echo -n docker > etc/sysconfig/tcuser; \
 	tcl-chroot sh -c '. /etc/init.d/tc-functions && setupHome'
 
-# packages (and their deps) that we either need for our "tce-load" patches or that dep on "...-KERNEL" which we don't need (since we build our own kernel)
-# http://distro.ibiblio.org/tinycorelinux/8.x/x86_64/tcz/squashfs-tools.tcz.dep
-# http://distro.ibiblio.org/tinycorelinux/8.x/x86_64/tcz/squashfs-tools.tcz.md5.txt
-# updated via "update.sh"
-ENV TCL_PACKAGES="squashfs-tools.tcz liblzma.tcz lzo.tcz libzstd.tcz" TCL_PACKAGE_MD5__squashfs_tools_tcz="a44331fa2117314e62267147b6876a49" TCL_PACKAGE_MD5__liblzma_tcz="846ce1b68690e46f61aff2f952da433f" TCL_PACKAGE_MD5__lzo_tcz="c9a1260675774c50cea1a490978b100d" TCL_PACKAGE_MD5__libzstd_tcz="a7f383473a4ced6c79e8b1a0cc9ad167"
+# as of squashfs-tools 4.4, TCL's unsquashfs is broken... (fails to unsquashfs *many* core tcz files)
+# https://github.com/plougher/squashfs-tools/releases
+ENV SQUASHFS_VERSION 4.4
+RUN wget -O squashfs.tgz "https://github.com/plougher/squashfs-tools/archive/$SQUASHFS_VERSION.tar.gz"; \
+	tar --directory=/usr/src --extract --file=squashfs.tgz; \
+	make -C "/usr/src/squashfs-tools-$SQUASHFS_VERSION/squashfs-tools" \
+		-j "$(nproc)" \
+# https://github.com/plougher/squashfs-tools/blob/4.4/squashfs-tools/Makefile#L1
+		GZIP_SUPPORT=1 \
+#		XZ_SUPPORT=1 \
+#		LZO_SUPPORT=1 \
+#		LZ4_SUPPORT=1 \
+#		ZSTD_SUPPORT=1 \
+		EXTRA_CFLAGS='-static' \
+		EXTRA_LDFLAGS='-static' \
+		INSTALL_DIR="$PWD/usr/local/bin" \
+		install \
+	; \
+	tcl-chroot unsquashfs -v || :
 
-RUN for package in $TCL_PACKAGES; do \
-		eval 'md5="$TCL_PACKAGE_MD5__'"$(echo "$package" | sed -r 's/[^a-zA-Z0-9]+/_/g')"'"'; \
-		echo "$md5 *$package" > "usr/local/tce.installed/optional/$package.md5.txt"; \
-		for mirror in $TCL_MIRRORS; do \
-			if \
-				wget -O "usr/local/tce.installed/optional/$package" "$mirror/$TCL_MAJOR/x86_64/tcz/$package" \
-				&& ( cd usr/local/tce.installed/optional && md5sum -c "$package.md5.txt" ) \
-			; then \
-				break; \
-			fi; \
-		done; \
-		( cd usr/local/tce.installed/optional && md5sum -c "$package.md5.txt" ); \
-		unsquashfs -dest . -force "usr/local/tce.installed/optional/$package"; \
-		touch "usr/local/tce.installed/${package%.tcz}"; \
-# pretend this package has no deps (we already installed them)
-		touch "usr/local/tce.installed/optional/$package.dep"; \
-	done; \
-	\
-	tcl-chroot ldconfig; \
-	for script in usr/local/tce.installed/*; do \
-		[ -f "$script" ] || continue; \
-		[ -x "$script" ] || continue; \
-		tcl-chroot "$script"; \
-	done; \
-	\
-	{ \
+RUN { \
 		echo '#!/bin/bash -Eeux'; \
 		echo 'tcl-chroot su -c "tce-load -wicl \"\$@\"" docker -- - "$@"'; \
 	} > /usr/local/bin/tcl-tce-load; \
@@ -186,7 +178,7 @@ ENV LINUX_GPG_KEYS \
 		647F28654894E3BD457199BE38DBBDC86092693E
 
 # updated via "update.sh"
-ENV LINUX_VERSION 4.14.134
+ENV LINUX_VERSION 4.19.103
 
 RUN wget -O /linux.tar.xz "https://cdn.kernel.org/pub/linux/kernel/v${LINUX_VERSION%%.*}.x/linux-${LINUX_VERSION}.tar.xz"; \
 	wget -O /linux.tar.asc "https://cdn.kernel.org/pub/linux/kernel/v${LINUX_VERSION%%.*}.x/linux-${LINUX_VERSION}.tar.sign"; \
@@ -317,10 +309,10 @@ RUN tcl-tce-load \
 		git \
 		iproute2 \
 		iptables \
-		ncurses-terminfo \
+		ncursesw-terminfo \
 		nfs-utils \
 		openssh \
-		openssl \
+		openssl-1.1.1 \
 		parted \
 		procps-ng \
 		rsync \
@@ -339,25 +331,11 @@ RUN echo 'for i in /usr/local/etc/profile.d/*.sh ; do if [ -r "$i" ]; then . $i;
 # install kernel headers so we can use them for building xen-utils, etc
 RUN make -C /usr/src/linux INSTALL_HDR_PATH=/usr/local headers_install
 
-# https://lkml.org/lkml/2018/4/12/711 (https://github.com/boot2docker/boot2docker/pull/1322)
-# https://github.com/jirka-h/haveged/releases
-ENV HAVEGED_VERSION 1.9.4
-RUN wget -O /haveged.tgz "https://github.com/jirka-h/haveged/archive/${HAVEGED_VERSION}.tar.gz"; \
-	mkdir /usr/src/haveged; \
-	tar --extract --file /haveged.tgz --directory /usr/src/haveged --strip-components 1; \
-	rm /haveged.tgz
-# https://debbugs.gnu.org/11064 (libtool eats "-static", gcc doesn't mind getting "--static" even more than once)
-RUN ( cd /usr/src/haveged && ./configure LDFLAGS='-static --static' ); \
-	make -C /usr/src/haveged/src -j "$(nproc)" haveged; \
-	cp -v /usr/src/haveged/src/haveged usr/local/sbin/; \
-	strip usr/local/sbin/haveged; \
-	tcl-chroot haveged --run 1
-
 # http://download.virtualbox.org/virtualbox/
 # updated via "update.sh"
-ENV VBOX_VERSION 6.0.10
+ENV VBOX_VERSION 5.2.36
 # https://www.virtualbox.org/download/hashes/$VBOX_VERSION/SHA256SUMS
-ENV VBOX_SHA256 c8a686f8c7ad9ca8375961ab19815cec6b1f0d2496900a356a38ce86fe8a1325
+ENV VBOX_SHA256 6124287b7a1790436a9b0b2601154b50c6cd6e680aeff45c61d03ee1158f3eb9
 # (VBoxGuestAdditions_X.Y.Z.iso SHA256, for verification)
 
 RUN wget -O /vbox.iso "https://download.virtualbox.org/virtualbox/$VBOX_VERSION/VBoxGuestAdditions_$VBOX_VERSION.iso"; \
@@ -403,7 +381,7 @@ RUN cp -vr /usr/src/parallels/tools/* ./; \
 
 # https://github.com/xenserver/xe-guest-utilities/tags
 # updated via "update.sh"
-ENV XEN_VERSION 7.14.0
+ENV XEN_VERSION 7.18.0
 
 RUN wget -O /xen.tgz "https://github.com/xenserver/xe-guest-utilities/archive/v$XEN_VERSION.tar.gz"; \
 	mkdir /usr/src/xen; \
@@ -434,7 +412,7 @@ RUN wget -O usr/local/sbin/cgroupfs-mount "https://github.com/tianon/cgroupfs-mo
 	chmod +x usr/local/sbin/cgroupfs-mount; \
 	tcl-chroot cgroupfs-mount
 
-ENV DOCKER_VERSION 19.03.1
+ENV DOCKER_VERSION 19.03.6
 
 # Get the Docker binaries with version that matches our boot2docker version.
 RUN DOCKER_CHANNEL='edge'; \

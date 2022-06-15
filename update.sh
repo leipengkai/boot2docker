@@ -2,18 +2,9 @@
 set -Eeuo pipefail
 
 # TODO http://distro.ibiblio.org/tinycorelinux/latest-x86_64
-major='10.x'
-version='10.1' # TODO auto-detect latest
+major='11.x'
+version='11.0' # TODO auto-detect latest
 # 9.x doesn't seem to use ".../archive/X.Y.Z/..." in the same way as 8.x :(
-
-packages=(
-	# needed for "tce-load.patch"
-	squashfs-tools.tcz
-
-	# required for Docker, deps on "xyz-KERNEL.tcz"
-	#iptables.tcz
-	# fixed via tce-load patch instead (more sustainable)
-)
 
 mirrors=(
 	http://distro.ibiblio.org/tinycorelinux
@@ -21,7 +12,10 @@ mirrors=(
 )
 
 # https://www.kernel.org/
-kernelBase='4.14'
+kernelBase='4.19'
+# https://github.com/boot2docker/boot2docker/issues/1398
+# https://download.virtualbox.org/virtualbox/
+vboxBase='5'
 
 # avoid issues with slow Git HTTP interactions (*cough* sourceforge *cough*)
 export GIT_HTTP_LOW_SPEED_LIMIT='100'
@@ -64,34 +58,6 @@ seds+=(
 	-e 's/^ENV TCL_ROOTFS.*/ENV TCL_ROOTFS="'"$rootfs"'" TCL_ROOTFS_MD5="'"$rootfsMd5"'"/'
 )
 
-archPackages=()
-archPackagesMd5s=()
-declare -A seen=()
-set -- "${packages[@]}"
-while [ "$#" -gt 0 ]; do
-	package="$1"; shift
-	[ -z "${seen[$package]:-}" ] || continue
-	seen[$package]=1
-
-	packageMd5="$(fetch "$arch/tcz/$package.md5.txt")"
-	packageMd5="${packageMd5%% *}"
-
-	archPackages+=( "$package" )
-	archPackagesMd5s+=(
-		'TCL_PACKAGE_MD5__'"$(echo "$package" | sed -r 's/[^a-zA-Z0-9]+/_/g')"'="'"$packageMd5"'"'
-	)
-
-	if packageDeps="$(
-		fetch "$arch/tcz/$package.dep" \
-			| grep -vE -- '-KERNEL'
-	)"; then
-		set -- $packageDeps "$@"
-	fi
-done
-seds+=(
-	-e 's!^ENV TCL_PACKAGES.*!ENV TCL_PACKAGES="'"${archPackages[*]}"'" '"${archPackagesMd5s[*]}"'!'
-)
-
 kernelVersion="$(
 	wget -qO- 'https://www.kernel.org/releases.json' \
 		| jq -r --arg base "$kernelBase" '.releases[] | .version | select(startswith($base + "."))'
@@ -100,7 +66,14 @@ seds+=(
 	-e 's!^(ENV LINUX_VERSION).*!\1 '"$kernelVersion"'!'
 )
 
-vboxVersion="$(wget -qO- 'https://download.virtualbox.org/virtualbox/LATEST-STABLE.TXT')"
+#vboxVersion="$(wget -qO- 'https://download.virtualbox.org/virtualbox/LATEST-STABLE.TXT')"
+vboxVersion="$(
+	wget -qO- 'https://download.virtualbox.org/virtualbox/' \
+		| grep -oE 'href="[0-9.]+/?"' \
+		| cut -d'"' -f2 | cut -d/ -f1 \
+		| grep -E "^$vboxBase[.]" \
+		| tail -1
+)"
 vboxSha256="$(
 	{
 		wget -qO- "https://download.virtualbox.org/virtualbox/$vboxVersion/SHA256SUMS" \
